@@ -36,6 +36,14 @@ int force_exit = 0;
 static unsigned int opts;
 const char *my_message = "{\"type\":\"ping\"}";
 
+// Handle tracking JSON structures.
+int json_brace_count = 0;
+int json_mode = 0;
+
+// Big 'ol buffer to store received data in.
+char *rx_buf = NULL;
+// char rx_buf[10000];
+
 /* A simple callback block - basically will send ping messages when connecting and
    when it ends up receiving, it will print the output to the user. */
 static int callback_protocol_fn (struct lws *wsi, enum lws_callback_reasons reason,
@@ -60,7 +68,35 @@ static int callback_protocol_fn (struct lws *wsi, enum lws_callback_reasons reas
 
     case LWS_CALLBACK_CLIENT_RECEIVE:
       ((char *) in)[len] = '\0';
-      printf ("%s\n", (char *) in);
+
+      if (json_mode) {
+        // Expand our memory
+        int rx_buflen = NULL == rx_buf ? 0 : strlen (rx_buf);
+        rx_buf = (char *) realloc (rx_buf, sizeof (rx_buf) * (rx_buflen  + len));
+
+        if (NULL == rx_buf)
+          {
+            fprintf (stderr, "Failed to realloc() memory!");
+          }
+
+        // We could copy in batches, but we need to count braces.
+        for (uint i = 0; i < len; i++)
+          {
+            if ('{' == ((char*) in)[i]) json_brace_count++;
+            if ('}' == ((char*) in)[i]) json_brace_count--;
+          }
+
+        memcpy (rx_buf + rx_buflen, (char *) in, len + 1);
+
+        // If even braces, flush buffer and output.
+        if (!json_brace_count) {
+          printf ("%s\n\n", rx_buf);
+          free (rx_buf);
+          rx_buf = NULL;
+        }
+      } else {
+        printf ("%s\n", (char *) in);
+      }
       // If we wanted to echo something back...
       // lws_callback_on_writable (wsi);
 
@@ -148,6 +184,8 @@ static struct option options[] = {
   { "ssl"        ,  no_argument,        NULL, 's' },
   { "port"       ,  required_argument,  NULL, 'p' },
   { "path"       ,  required_argument,  NULL, 'u' },
+  { "raw"        ,  no_argument,        NULL, 'r' },
+  { "json"       ,  no_argument,        NULL, 'j' },
   { NULL         , 0, 0, 0 }
 };
 
@@ -221,6 +259,14 @@ main (int argc, char *argv[])
           path[strlen (optarg)] = '\0';
           break;
 
+        case 'r':
+          json_mode = 0;
+          break;
+
+        case 'j':
+          json_mode = 1;
+          break;
+
         default:
           goto usage;
         }
@@ -290,6 +336,8 @@ main (int argc, char *argv[])
           "  -s, --ssl                    Use SSL with trust checks.\n"
           "  -p, --port                   The port to run on.\n"
           "  -u, --path                   The path to request.\n"
+          "  -r, --raw                    Output all data as it comes in.\n"
+          "  -j, --json                   Break incoming data into JSON receives.\n"
           );
 
   return 0;
